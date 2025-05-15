@@ -8,6 +8,11 @@ MainWindow::MainWindow(QWidget *parent)
 {
     ui->setupUi(this);
 
+    ui->stackedWidget->setCurrentWidget(ui->pageList);
+
+    //QIcon appIcon(":/icon/truck_icon.png"); // путь к ресурсу
+    //QApplication::setWindowIcon(appIcon);
+    //this->setWindowIcon(QIcon(":/icon/truck_icon.png"));
 
     if (!mapView) {
         mapView = new QWebEngineView(this);
@@ -22,11 +27,22 @@ MainWindow::MainWindow(QWidget *parent)
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addWidget(routeView);
     }
+    if (!updateTimer){
+        updateTimer = new QTimer(this);
+    }
 
-    QTimer *updateTimer = new QTimer(this);
-    connect(updateTimer, &QTimer::timeout, this, &MainWindow::updateMap);
-    updateTimer->start(5000); // каждую секунду
+
+
     loadVehiclesTable();
+
+    connect(ui->btnList, &QPushButton::clicked, this, &MainWindow::onStopClicked);
+    connect(ui->btnBackToList, &QPushButton::clicked, this, &MainWindow::onStopClicked);
+    connect(ui->btnAdd, &QPushButton::clicked, this, &MainWindow::onStopClicked);
+    connect(ui->btnRoutes, &QPushButton::clicked, this, &MainWindow::onStopClicked);
+
+    ui->textEdit_info->hide();
+    ui->textEdit_info->clear();
+    //ui->textEdit_info->
 
     ui->dateEditRouteDate->setDate(QDate::currentDate());
     ui->label_hideNumber->hide();
@@ -49,6 +65,8 @@ MainWindow::MainWindow(QWidget *parent)
         "97", "98", "99", "102", "113", "116", "121", "123", "124", "125", "134", "136", "138", "142", "150", "152", "154", "159", "161", "163", "164",
         "173", "174", "177", "178", "186", "190", "196", "197", "199", "716", "750", "761", "763", "777", "790", "799", "890", "999"
     };
+    ui->tableRoutes->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    ui->tableVehicles->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
 //    connect(ui->lineEdit_search, &QLineEdit::textChanged, this, [=](const QString &text){
 //        QRegularExpressionMatch match = regExp.match(text);
@@ -67,26 +85,86 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    delete mapView;
-    mapView = nullptr;
-    delete routeView;
-    routeView = nullptr;
+
+    if (mapView) {
+        // Очищаем содержимое WebEngine
+        mapView->setUrl(QUrl()); // или mapView->setHtml("");
+        //mapView->setHtml("");
+        // Удаляем объект
+        mapView->deleteLater();
+        delete mapView;
+        mapView = nullptr;
+    }
+    if (routeView) {
+        // Очищаем содержимое WebEngine
+        routeView->setUrl(QUrl()); // или routeView->setHtml("");
+
+        // Удаляем объект
+        delete routeView;
+        routeView = nullptr;
+    }
+
     delete ui;
 }
 
-void MainWindow::updateMap() {
-    // Подключение к базе данных (или использовать уже открытое)
-    QSqlQuery query("SELECT plate_number, latitude, longitude FROM truck_positions");
-    QString js = "clearMarkers();\n";
-    while (query.next()) {
-        QString id = query.value(0).toString();
-        double lat = query.value(1).toDouble();
-        double lon = query.value(2).toDouble();
-        js += QString("addOrUpdateMarker('%1', %2, %3);\n").arg(id).arg(lat).arg(lon);
+void MainWindow::updateMap(const QString& plateNumber) {
+    QSqlQuery query;
+    query.prepare("SELECT plate_number, latitude, longitude, timestamp FROM truck_positions WHERE plate_number = :plate ORDER BY timestamp DESC LIMIT 1");
+    query.bindValue(":plate", plateNumber);
+
+    if (!query.exec() || !query.next()) {
+        qDebug() << "SQL error or no data:" << query.lastError().text();
+        return;
     }
-    if (mapView && mapReady) {
+
+    QString id = query.value(0).toString();
+    double lat = query.value(1).toDouble();
+    double lon = query.value(2).toDouble();
+    QDateTime timestamp = QDateTime::fromString(query.value(3).toString(), Qt::ISODate);
+
+    // Обновляем карту
+    QString js = "clearMarkers();\n";
+    js += QString("addOrUpdateMarker('%1', %2, %3);\n").arg(id).arg(lat).arg(lon);
+    if (mapView && mapReady && mapView->page()) {
         mapView->page()->runJavaScript(js);
     }
+
+    // Отображаем данные в textEdit_info
+    ui->textEdit_info->show();
+
+
+
+    QString formattedTime = timestamp.toString("yyyy-MM-dd HH:mm:ss");
+
+    ui->textEdit_info->clear();
+    ui->textEdit_info->append("Номер: " + id);
+    ui->textEdit_info->append("Время: " + formattedTime);
+
+
+
+
+    // Обратное геокодирование (по координатам получаем адрес)
+    QString url = QString("https://nominatim.openstreetmap.org/reverse?format=json&lat=%1&lon=%2&zoom=18&addressdetails=1")
+                  .arg(lat).arg(lon);
+
+    QNetworkRequest request((QUrl(url)));
+    request.setRawHeader("User-Agent", "Qt Application");
+
+    QNetworkAccessManager* manager = new QNetworkAccessManager(this);
+    QNetworkReply* reply = manager->get(request);
+
+    connect(reply, &QNetworkReply::finished, this, [=]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            QJsonObject obj = doc.object();
+            QString address = obj["display_name"].toString();
+            ui->textEdit_info->append("Адрес: " + address);
+        } else {
+            ui->textEdit_info->append("Адрес: [не удалось получить]");
+        }
+        reply->deleteLater();
+        manager->deleteLater();
+    });
 }
 
 void MainWindow::on_btnList_clicked()
@@ -166,7 +244,7 @@ void MainWindow::loadVehiclesTable()
     header->setSectionResizeMode(3, QHeaderView::Fixed);
     ui->tableVehicles->setColumnWidth(3, 120);  // Задаём ширину в пикселях
     header->setSectionResizeMode(4, QHeaderView::Fixed);
-    ui->tableVehicles->setColumnWidth(4, 150);  // Задаём ширину в пикселях
+    ui->tableVehicles->setColumnWidth(4, 200);  // Задаём ширину в пикселях
 }
 
 void MainWindow::onCreateRouteClicked()
@@ -191,14 +269,28 @@ void MainWindow::onTrackVehicleClicked()
     QPushButton* btn = qobject_cast<QPushButton*>(sender());
     if (!btn) return;
 
-    QString vehicle_plateNumber = btn->property("vehicle_plateNumber").toString();
-    trackVehicle(vehicle_plateNumber);
+    currentTrackedPlateNumber = btn->property("vehicle_plateNumber").toString();
+    trackVehicle(currentTrackedPlateNumber);
 
-    // TODO: Запомнить vehicleId, переключить на страницу с картой, передать ID
-    //setupMap(55.7558, 37.6173);
-    //ui->stackedWidget->setCurrentWidget(ui->pageTracking);
+
+    updateMap(currentTrackedPlateNumber);
+    disconnect(updateTimer, nullptr, nullptr, nullptr);
+    connect(updateTimer, &QTimer::timeout, this, [this]() {
+        updateMap(currentTrackedPlateNumber);
+    });
+
+    if (!updateTimer->isActive()) {
+        updateTimer->start(10000);
+    }
 }
 
+void MainWindow::onStopClicked() {
+    if (updateTimer->isActive()) {
+        updateTimer->stop();
+        ui->textEdit_info->hide();
+        ui->textEdit_info->clear();
+    }
+}
 void MainWindow::on_btnAddVehicle_clicked()
 {
     QString plate = ui->lineEditPlate->text().trimmed();
@@ -244,13 +336,6 @@ void MainWindow::on_btnBackToList_clicked()
 // Вывод карты
 void MainWindow::setupMap(double latitude, double longitude)
 {
-//    if (!mapView) {
-//        mapView = new QWebEngineView(this);
-//        QVBoxLayout *layout = new QVBoxLayout(ui->mapPlaceholder);
-//        layout->setContentsMargins(0, 0, 0, 0);
-//        layout->addWidget(mapView);
-//    }
-
     QString html = QString(R"(
     <!DOCTYPE html>
     <html>
@@ -259,7 +344,7 @@ void MainWindow::setupMap(double latitude, double longitude)
         <title>Truck Tracker</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            html, body, #map { height: 100%; margin: 0; }
+            html, body, #map { height: 100%; margin: 0; padding: 0; }
         </style>
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -267,19 +352,27 @@ void MainWindow::setupMap(double latitude, double longitude)
     <body>
         <div id="map"></div>
         <script>
-            var map = L.map('map').setView([%1, %2], 13);
+            var map = L.map('map', { attributionControl: false }).setView([%1, %2], 13);
+
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '© OpenStreetMap'
+                maxZoom: 19
             }).addTo(map);
 
             var markers = {};
+
+            // Машина-иконка (можно заменить на свою)
+            var carIcon = L.icon({
+                iconUrl: 'https://cdn-icons-png.flaticon.com/512/5465/5465675.png',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+                popupAnchor: [0, -16]
+            });
 
             function addOrUpdateMarker(id, lat, lon) {
                 if (markers[id]) {
                     markers[id].setLatLng([lat, lon]);
                 } else {
-                    markers[id] = L.marker([lat, lon]).addTo(map).bindPopup(id);
+                    markers[id] = L.marker([lat, lon], { icon: carIcon }).addTo(map).bindPopup(id);
                 }
             }
 
@@ -291,7 +384,7 @@ void MainWindow::setupMap(double latitude, double longitude)
             }
 
             // Добавляем начальную метку
-            addOrUpdateMarker("Начальная позиция", %1, %2);
+            addOrUpdateMarker("Машина", %1, %2);
         </script>
     </body>
     </html>
@@ -656,7 +749,7 @@ void MainWindow::showMapWithRoute(const QVector<QPair<double, double>>& routePoi
     <body>
         <div id="map"></div>
         <script>
-            var map = L.map('map').setView([%1, %2], 13);
+            var map = L.map('map', { attributionControl: false }).setView([%1, %2], 13);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 maxZoom: 19,
                 attribution: '© OpenStreetMap'

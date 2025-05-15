@@ -12,6 +12,12 @@
 #include <QtWebEngineWidgets/QWebEngineView>
 #include <QTimer>
 
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
@@ -43,7 +49,7 @@ private slots:
 
     void trackVehicle(const QString& licensePlate);
 
-    void updateMap();
+    void updateMap(const QString& plateNumber);
 
     void onCreateRouteClicked();
 
@@ -64,13 +70,15 @@ private slots:
     void on_lineEdit_searchRoute_textChanged();
 
     void on_btnBackToList_2_clicked();
+    void onStopClicked();
 
 private:
     Ui::MainWindow *ui;
 
     QWebEngineView *mapView = nullptr;
     QWebEngineView *routeView = nullptr;
-
+    QTimer *updateTimer = nullptr;
+    QString currentTrackedPlateNumber;
     bool mapReady = false;
 };
 #endif // MAINWINDOW_H

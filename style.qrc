@@ -1,0 +1,9 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>style/darkstyle.qss</file>
+    </qresource>
+    <qresource prefix="/">
+        <file>icon/icon_truck.png</file>
+    </qresource>
+</RCC>
